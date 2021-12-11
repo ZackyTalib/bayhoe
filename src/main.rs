@@ -19,9 +19,18 @@ fn parse_combo_list(path: &str) -> Result<Vec<checker::Combo>, Box<dyn std::erro
 #[tokio::main]
 async fn main() {
     let path_to_file: Vec<String> = std::env::args().collect();
-    for combo in parse_combo_list(&path_to_file[1]).expect("Invalid path to file") {
+    if path_to_file.len() < 2 {
+        println!("Error: path to combo list not provided")
+    }
+    for combo in parse_combo_list(&path_to_file[1]).expect("Error: invalid path to file") {
         let checker_client = checker::Checker::new();
-        let res = checker_client.check_combo(&combo).await.unwrap();
+        let res = match checker_client.check_combo(&combo).await {
+            Ok(res) => res,
+            Err(e) => {
+                println!("{}", e);
+                continue
+            }
+        };
         println!("{:?} - {:?}", combo, res);
     }
 }
